@@ -37,6 +37,96 @@ env:
   LLGO_REF: ${{ inputs.llgo_ref || 'main' }}
 
 jobs:
+  native-layout:
+    name: Native layouts (${{ matrix.platform }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    # Run both optimization levels once per native target, independently of
+    # corpus sharding and the shorter pull-request compiler gates.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            os: ubuntu-24.04
+          - platform: linux/arm64
+            os: ubuntu-24.04-arm
+          - platform: darwin/amd64
+            os: macos-15-intel
+          - platform: darwin/arm64
+            os: macos-latest
+          - platform: windows-msvc/amd64
+            os: windows-2022
+            windows_abi: msvc
+            windows_arch: amd64
+          - platform: windows-mingw/amd64
+            os: windows-2022
+            windows_abi: mingw
+            windows_arch: amd64
+          - platform: windows-msvc/arm64
+            os: windows-11-arm
+            windows_abi: msvc
+            windows_arch: arm64
+          - platform: windows-mingw/arm64
+            os: windows-11-arm
+            windows_abi: mingw
+            windows_arch: arm64
+          - platform: windows-msvc/386
+            os: windows-2022
+            windows_abi: msvc
+            windows_arch: "386"
+          - platform: windows-mingw/386
+            os: windows-2022
+            windows_abi: mingw
+            windows_arch: "386"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
+          ref: ${{ env.LLGO_REF }}
+      - name: Check out Intel LLVM setup
+        if: matrix.platform == 'darwin/amd64'
+        uses: actions/checkout@v7
+        with:
+          path: compatibility-ci
+      - uses: ./compatibility-ci/.github/actions/setup-macos-intel-llvm
+        id: intel-llvm
+        if: matrix.platform == 'darwin/amd64'
+      - uses: ./.github/actions/setup-deps
+        with:
+          llvm-version: 22
+          install-llvm: ${{ matrix.platform != 'darwin/amd64' }}
+          windows-abi: ${{ matrix.windows_abi || 'msvc' }}
+          windows-arch: ${{ matrix.windows_arch || 'amd64' }}
+      - uses: ./.github/actions/setup-go
+        with:
+          architecture: ${{ matrix.windows_arch == 'arm64' && 'arm64' || '' }}
+      - name: Build compiler and layout IR tool
+        id: build-tools
+        shell: bash
+        env:
+          GOFLAGS: ${{ steps.intel-llvm.outputs.go-flags || env.GOFLAGS }}
+          CGO_CPPFLAGS: ${{ steps.intel-llvm.outputs.cgo-cppflags || env.CGO_CPPFLAGS }}
+          CGO_LDFLAGS: ${{ steps.intel-llvm.outputs.cgo-ldflags || env.CGO_LDFLAGS }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/layout-tools"
+          go build -o "$RUNNER_TEMP/layout-tools/" ./cmd/llgo ./chore/llgen
+          echo "$RUNNER_TEMP/layout-tools" >> "$GITHUB_PATH"
+          echo "LLGO_ROOT=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/activate-windows-target
+        if: runner.os == 'Windows'
+        with:
+          windows-abi: ${{ matrix.windows_abi }}
+          windows-arch: ${{ matrix.windows_arch }}
+      - name: Compare native layouts with Go
+        uses: ./.github/actions/check-layout
+        with:
+          llgo: ${{ runner.temp }}/layout-tools/llgo${{ runner.os == 'Windows' && '.exe' || '' }}
+          llgen: ${{ runner.temp }}/layout-tools/llgen${{ runner.os == 'Windows' && '.exe' || '' }}
+          artifact-name: layout-${{ matrix.os }}-${{ matrix.windows_abi || 'native' }}-${{ matrix.windows_arch || runner.arch }}
+
   core-regressions:
     if: github.event_name == 'pull_request'
     uses: ./.github/workflows/regressions.yml
