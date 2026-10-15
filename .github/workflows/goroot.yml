@@ -43,7 +43,7 @@ jobs:
     with:
       llgo_repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
       llgo_ref: ${{ inputs.llgo_ref || 'main' }}
-      wasmer_pr3: true
+      wasmer_release: true
 
   goroot-matrix:
     name: GOROOT matrix
@@ -492,19 +492,19 @@ jobs:
       - name: Set up Binaryen
         uses: ./.github/actions/setup-binaryen
 
-      - name: Install qualified Wasmer PR 3 artifact
+      - name: Install Wasmer llgo-v7.5.0.2
         if: matrix.wasm_profile == 'W32-WASI'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          package="$RUNNER_TEMP/wasmer-pr3"
-          gh run download 37578522115 --repo xgo-dev/wasmer \
-            --name wasmer-linux-amd64 --dir "$package"
+          package="$RUNNER_TEMP/wasmer-llgo-v7.5.0.2"
+          gh release download llgo-v7.5.0.2 --repo xgo-dev/wasmer \
+            --pattern wasmer-linux-amd64.tar.gz --dir "$package"
           (
             cd "$package"
-            sha256sum --check wasmer-linux-amd64.tar.gz.sha256
+            echo '7878597d48f7e2435b8da1f43e11499fc3073dc0191a6c74c00c27f33849f179  wasmer-linux-amd64.tar.gz' | sha256sum --check
             tar -xzf wasmer-linux-amd64.tar.gz
-            test "$(cat REVISION)" = "9b1ec57008d22f87f76ed86e8f6b274ce180f487"
+            test "$(cat REVISION)" = "7692163d5f320ba0d475b2f848f36c1e1bcbdd57"
           )
           chmod +x "$package/bin/wasmer"
           "$package/bin/wasmer" --version -v
