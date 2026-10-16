@@ -309,6 +309,8 @@ jobs:
             [[ "${{ matrix.windows_arch }}" == "amd64" ]] || [[ "${{ matrix.windows_arch }}" == "arm64" ]]
           }; then
             serial_cases='(^|[[:space:]])(rangegen\.go|fixedbugs/issue39541\.go)$'
+          elif [[ "$RUNNER_OS" == "Windows" && "${{ matrix.windows_arch }}" == "386" ]]; then
+            serial_cases='(^|[[:space:]])(index0\.go|cmplxdivide\.go|fixedbugs/issue39541\.go)$'
           elif [[ "${{ matrix.platform }}" == "darwin/amd64" ]]; then
             serial_cases='(^|[[:space:]])rangegen\.go$'
           fi
@@ -684,14 +686,43 @@ jobs:
             return "${pipeline_status[0]}"
           }
 
-          run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" &
-          pids=("$!")
-          run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" &
-          pids+=("$!")
+          # The complete GOROOT filesystem walk competes with the paired
+          # compiler on Emscripten32. Detect it from either version's shard.
+          serial_versions=0
+          if [[ "${{ matrix.wasm_profile }}" == "J32-Emscripten" ]]; then
+            for selection in "${{ steps.go126.outputs.version }}:$shard_index" "${{ steps.go127.outputs.version }}:$paired_shard_index"; do
+              version=${selection%:*}
+              target_shard=${selection##*:}
+              target_goroot=$GO126_GOROOT
+              if [[ "$version" == "${{ steps.go127.outputs.version }}" ]]; then
+                target_goroot=$GO127_GOROOT
+              fi
+              case_list="$RUNNER_TEMP/goroot-serial-go${version}.txt"
+              "$LLGO_GOROOT_RUNNER" -test.run='^TestGoRootRunCases$' -test.count=1 \
+                -goroot "$target_goroot" -directive-mode ci \
+                -wasm-profile "${{ matrix.wasm_profile }}" -list-case-paths \
+                -shard-index "$target_shard" -shard-total "$LLGO_GOROOT_SHARD_TOTAL" \
+                >"$case_list" 2>&1
+              if grep -Eq '(^|[[:space:]])winbatch\.go$' "$case_list"; then
+                echo "Serializing Go versions for winbatch.go in Go $version shard $target_shard/$LLGO_GOROOT_SHARD_TOTAL"
+                serial_versions=1
+              fi
+              rm -f "$case_list"
+            done
+          fi
           status=0
-          for pid in "${pids[@]}"; do
-            wait "$pid" || status=1
-          done
+          if (( serial_versions )); then
+            run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" || status=1
+            run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" || status=1
+          else
+            run_goroot "$GO126_GOROOT" "${{ steps.go126.outputs.version }}" "$shard_index" &
+            pids=("$!")
+            run_goroot "$GO127_GOROOT" "${{ steps.go127.outputs.version }}" "$paired_shard_index" &
+            pids+=("$!")
+            for pid in "${pids[@]}"; do
+              wait "$pid" || status=1
+            done
+          fi
           exit "$status"
 
       - name: Summarize GOROOT shard
