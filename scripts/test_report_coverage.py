@@ -8,6 +8,7 @@ from check_report_coverage import (
     WASM_SHARDS,
     check_goroot,
     check_partition,
+    check_revisions,
     check_std,
     check_targets,
     std_native_reports,
@@ -62,6 +63,21 @@ class CoverageTests(unittest.TestCase):
 
     def test_full_goroot_coverage(self):
         self.assertEqual([], self.check_rows(self.goroot_rows()))
+
+    def test_mixed_compiler_revisions_cannot_pass(self):
+        sha = "a" * 40
+        native = self.root / "summary-linux-amd64-1.27.0-0.tsv"
+        wasm = self.root / "acceptance.json"
+        native.touch()
+        wasm.touch()
+        self.assertEqual(2, len(check_revisions([native, wasm], sha)))
+        native.with_name("revision-linux-amd64-1.27.0-0.txt").write_text(sha + "\n")
+        wasm.with_name("revision.txt").write_text("b" * 40)
+        errors = check_revisions([native, wasm], sha)
+        self.assertEqual(1, len(errors))
+        self.assertIn("acceptance.json", errors[0])
+        wasm.with_name("revision.txt").write_text(sha + "\n")
+        self.assertEqual([], check_revisions([native, wasm], sha))
 
     def test_issue35_partial_matrix_cannot_pass(self):
         rows = []

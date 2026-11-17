@@ -130,6 +130,13 @@ jobs:
           )
           chmod +x "$package/bin/wasmer"
           echo "$package/bin" >> "$GITHUB_PATH"
+      - name: Run bounded WASI concurrent GC coverage
+        if: matrix.wasm_profile == 'W32-WASI'
+        env:
+          LLGO_ROOT: ${{ github.workspace }}
+        run: |
+          "$RUNNER_TEMP/core-tools/llgo" test -target wasi -emulator \
+            -v -count=1 -timeout=2m -run '^TestGCConcurrentTypedMutation$' ./test/go
       - name: Run the selected regressions
         id: regressions
         shell: bash
@@ -180,6 +187,8 @@ jobs:
           modfile="$RUNNER_TEMP/core-runtime.mod"
           cp .github/test-go.mod "$modfile"
           cp .github/test-go.sum "${modfile%.mod}.sum"
+          go_version="$(go env GOVERSION)"
+          go mod edit -modfile="$modfile" -go="${go_version#go}"
           go mod edit -modfile="$modfile" -replace="github.com/xgo-dev/llgo/runtime=$PWD/runtime"
           LLGO="$RUNNER_TEMP/core-tools/llgo" LLGO_TEST_MODFILE="$modfile" \
             bash dev/test_std_buildmodes.sh ./test/std/runtime
