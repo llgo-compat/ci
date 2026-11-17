@@ -130,6 +130,13 @@ jobs:
           )
           chmod +x "$package/bin/wasmer"
           echo "$package/bin" >> "$GITHUB_PATH"
+      - name: Run bounded WASI concurrent GC coverage
+        if: matrix.wasm_profile == 'W32-WASI'
+        env:
+          LLGO_ROOT: ${{ github.workspace }}
+        run: |
+          "$RUNNER_TEMP/core-tools/llgo" test -target wasi -emulator \
+            -v -count=1 -timeout=2m -run '^TestGCConcurrentTypedMutation$' ./test/go
       - name: Run the selected regressions
         id: regressions
         shell: bash

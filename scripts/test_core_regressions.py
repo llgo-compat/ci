@@ -44,7 +44,7 @@ class CoreRegressionTests(unittest.TestCase):
             with self.subTest(platform=job["platform"]):
                 self.assertLessEqual(len(job["case_paths"]), 10 if job["wasm_profile"] == "W32-WASI" else 8)
                 if job["wasm_profile"] == "W32-WASI":
-                    self.assertTrue({"gcstring.go", "gcgort.go", "fixedbugs/issue79186.go"} <= set(job["case_paths"]))
+                    self.assertTrue({"gcstring.go", "fixedbugs/issue79186.go"} <= set(job["case_paths"]))
                 if job["platform"] == "darwin/amd64":
                     self.assertIn("ken/chan.go", job["case_paths"])
                 if job["wasm_profile"].startswith("J"):
@@ -53,6 +53,17 @@ class CoreRegressionTests(unittest.TestCase):
                 pattern = re.compile(job["cases"])
                 self.assertTrue(all(pattern.fullmatch(path) for path in job["case_paths"]))
                 self.assertIsNone(pattern.fullmatch(job["case_paths"][0].replace(".go", "Xgo")))
+
+    def test_wasi_gc_coverage_executes_the_bounded_regression(self):
+        jobs = regression_matrix()["include"]
+        wasi = next(job for job in jobs if job["wasm_profile"] == "W32-WASI")
+        self.assertNotIn("gcgort.go", wasi["case_paths"])
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/regressions.yml").read_text()
+        step = workflow.split("      - name: Run bounded WASI concurrent GC coverage\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("if: matrix.wasm_profile == 'W32-WASI'", step)
+        self.assertIn("test -target wasi -emulator", step)
+        self.assertIn("-run '^TestGCConcurrentTypedMutation$' ./test/go", step)
+        self.assertNotIn("continue-on-error", step)
 
     def test_failures_and_classified_skips_cannot_pass(self):
         for result in ("expected-fail", "flaky-fail", "not-applicable", "host-skip", "resource-fail"):
