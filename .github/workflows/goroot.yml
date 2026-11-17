@@ -8,6 +8,7 @@ on:
       - .github/actions/setup-macos-intel-llvm/**
       - .github/actions/setup-goroot-policy/**
       - scripts/**
+      - .github/actions/resolve-llgo/**
   workflow_dispatch:
     inputs:
       llgo_repository:
@@ -36,14 +37,16 @@ concurrency:
 
 env:
   LLGO_REF: ${{ inputs.llgo_ref || 'main' }}
+  LLGO_REPOSITORY: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
 
 jobs:
   core-regressions:
+    needs: goroot-matrix
     if: github.event_name == 'pull_request'
     uses: ./.github/workflows/regressions.yml
     with:
       llgo_repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-      llgo_ref: ${{ inputs.llgo_ref || 'main' }}
+      llgo_ref: ${{ needs.goroot-matrix.outputs.llgo-sha }}
       wasmer_release: true
 
   goroot-matrix:
@@ -51,10 +54,17 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      llgo-sha: ${{ steps.revision.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
       - name: Verify matrix and report coverage regressions
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Resolve LLGo revision
+        id: revision
+        uses: ./.github/actions/resolve-llgo
+        with:
+          repository: ${{ env.LLGO_REPOSITORY }}
+          ref: ${{ env.LLGO_REF }}
       - name: Generate native matrix
         id: matrix
         run: |
@@ -92,7 +102,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ env.LLGO_REF }}
+          ref: ${{ needs.goroot-matrix.outputs.llgo-sha }}
 
       - name: Resolve target Go versions
         id: target-go
@@ -399,6 +409,7 @@ jobs:
               "$platform" "$go_version" "$actual_shard" "$selected" \
               "$observed" "$passed" "$failed" "$skipped" "$shard_total" \
               >"$report_dir/summary-$report_id.tsv"
+            git rev-parse HEAD >"$report_dir/revision-$report_id.txt"
             awk -F '\t' \
               -v platform="$platform" \
               -v version="$go_version" \
@@ -483,7 +494,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ env.LLGO_REF }}
+          ref: ${{ needs.goroot-matrix.outputs.llgo-sha }}
 
       - name: Resolve target Go versions
         id: target-go
@@ -780,6 +791,7 @@ jobs:
               "$platform" "$go_version" "$actual_shard" "$selected" \
               "$observed" "$passed" "$failed" "$skipped" "$shard_total" \
               >"$report_dir/summary-$report_id.tsv"
+            git rev-parse HEAD >"$report_dir/revision-$report_id.txt"
             awk -F '\t' \
               -v platform="$platform" \
               -v version="$go_version" \
@@ -828,8 +840,8 @@ jobs:
 
   goroot-summary:
     name: GOROOT summary
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success') }}
-    needs: [core-regressions, goroot, goroot-wasm]
+    if: ${{ !cancelled() && needs.goroot-matrix.result == 'success' && (github.event_name != 'pull_request' || needs.core-regressions.result == 'success') }}
+    needs: [goroot-matrix, core-regressions, goroot, goroot-wasm]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -838,7 +850,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ env.LLGO_REF }}
+          ref: ${{ needs.goroot-matrix.outputs.llgo-sha }}
 
       - name: Set up Go for the report generator
         uses: ./.github/actions/setup-go
@@ -860,6 +872,7 @@ jobs:
         id: report
         if: always()
         env:
+          LLGO_SHA: ${{ needs.goroot-matrix.outputs.llgo-sha }}
           GOROOT_RESULT: ${{ needs.goroot.result }}
           WASM_RESULT: ${{ needs.goroot-wasm.result }}
           NATIVE_EXPECTED_REPORTS: ${{ needs.goroot.outputs.expected-reports }}
@@ -890,7 +903,8 @@ jobs:
           coverage_md="$RUNNER_TEMP/goroot-coverage.md"
           coverage_ok=0
           if python3 compatibility-ci/scripts/check_report_coverage.py goroot \
-            --summary "$summary_tsv" --versions "$go126,$go127" >"$coverage_md"; then
+            --summary "$summary_tsv" --versions "$go126,$go127" \
+            --reports reports --revision "$LLGO_SHA" >"$coverage_md"; then
             coverage_ok=1
           fi
           write_row() {
@@ -923,6 +937,8 @@ jobs:
 
           {
             echo '## GOROOT run summary'
+            echo
+            echo "LLGo: [$LLGO_SHA](https://github.com/$LLGO_REPOSITORY/commit/$LLGO_SHA)"
             echo
             echo "Received $report_count/$expected_reports shard reports (two Go versions per configured matrix job)."
             echo

@@ -47,6 +47,24 @@ def check_partition(shards):
     return None
 
 
+def check_revisions(reports, expected):
+    """Every received report must identify the immutable compiler it tested."""
+    errors = []
+    for report in reports:
+        if report.name == "acceptance.json":
+            revision = report.with_name("revision.txt")
+        else:
+            revision = report.with_name(report.stem.replace("summary-", "revision-", 1) + ".txt")
+        try:
+            actual = revision.read_text().strip()
+        except OSError:
+            errors.append(f"{report.name}: missing LLGo revision")
+            continue
+        if actual != expected:
+            errors.append(f"{report.name}: LLGo revision {actual!r}, expected {expected}")
+    return errors
+
+
 def check_goroot(summary, versions):
     groups = defaultdict(list)
     errors = []
@@ -166,9 +184,12 @@ def main():
     goroot = subparsers.add_parser("goroot")
     goroot.add_argument("--summary", required=True)
     goroot.add_argument("--versions", required=True)
+    goroot.add_argument("--reports")
+    goroot.add_argument("--revision")
     std = subparsers.add_parser("std")
     std.add_argument("--native-reports", required=True)
     std.add_argument("--wasm-reports", required=True)
+    std.add_argument("--revision")
     targets = subparsers.add_parser("targets")
     targets.add_argument("--reports", required=True)
     args = parser.parse_args()
@@ -177,8 +198,16 @@ def main():
         if len(versions) != 2 or len(set(versions)) != 2:
             parser.error("GOROOT requires two distinct Go versions")
         errors, description = check_goroot(args.summary, versions)
+        if args.revision:
+            if not args.reports:
+                parser.error("--revision requires --reports")
+            errors += check_revisions(Path(args.reports).rglob("summary-*.tsv"), args.revision)
     elif args.suite == "std":
         errors, description = check_std(args.native_reports, args.wasm_reports)
+        if args.revision:
+            reports = [*Path(args.native_reports).rglob("summary-*.tsv"),
+                       *Path(args.wasm_reports).rglob("acceptance.json")]
+            errors += check_revisions(reports, args.revision)
     else:
         errors, description = check_targets(args.reports)
     print(f"Coverage: {'❌ incomplete' if errors else '✅ complete'} ({description}).")

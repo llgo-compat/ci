@@ -6,6 +6,7 @@ on:
       - .github/workflows/std.yml
       - .github/actions/setup-macos-intel-llvm/**
       - scripts/**
+      - .github/actions/resolve-llgo/**
   workflow_dispatch:
     inputs:
       llgo_repository:
@@ -33,6 +34,7 @@ permissions:
 
 env:
   LLGO_REF: ${{ inputs.llgo_ref || 'main' }}
+  LLGO_REPOSITORY: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
 
 jobs:
   std-matrix:
@@ -40,10 +42,17 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
+      llgo-sha: ${{ steps.revision.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
       - name: Verify matrix and report coverage regressions
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Resolve LLGo revision
+        id: revision
+        uses: ./.github/actions/resolve-llgo
+        with:
+          repository: ${{ env.LLGO_REPOSITORY }}
+          ref: ${{ env.LLGO_REF }}
       - name: Generate native matrix
         id: matrix
         run: |
@@ -62,7 +71,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ env.LLGO_REF }}
+          ref: ${{ needs.std-matrix.outputs.llgo-sha }}
       - name: Check out Intel LLVM setup
         if: matrix.platform == 'darwin/amd64'
         uses: actions/checkout@v7
@@ -199,6 +208,7 @@ jobs:
           printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
             "$platform" "$LANE" "$GO_VERSION" "$SHARD_INDEX" "$SHARD_TOTAL" "$JOB_STATUS" \
             >"$report_dir/summary-$report_id.tsv"
+          git rev-parse HEAD >"$report_dir/revision-$report_id.txt"
 
       - name: Upload native shard summary
         if: always()
@@ -210,6 +220,7 @@ jobs:
           retention-days: 1
 
   wasm-std:
+    needs: std-matrix
     name: wasm std acceptance (${{ matrix.profile }}, ${{ matrix.shard }}/${{ matrix.profile == 'W32-WASI' && 5 || 3 }})
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -229,7 +240,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ env.LLGO_REF }}
+          ref: ${{ needs.std-matrix.outputs.llgo-sha }}
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
@@ -291,6 +302,7 @@ jobs:
         if: always()
         shell: bash
         run: |
+          git rev-parse HEAD >"$RUNNER_TEMP/revision.txt"
           report="${{ runner.temp }}/acceptance.json"
           if [[ -f "$report" ]]; then
             jq -r '
@@ -319,10 +331,12 @@ jobs:
           name: wasm-acceptance-${{ matrix.profile }}-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/acceptance.json
+            ${{ runner.temp }}/revision.txt
             ${{ runner.temp }}/acceptance.json.logs/
           if-no-files-found: error
 
   wasm-browser:
+    needs: std-matrix
     name: real-browser GoJS callback
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -333,7 +347,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ env.LLGO_REF }}
+          ref: ${{ needs.std-matrix.outputs.llgo-sha }}
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
@@ -361,6 +375,7 @@ jobs:
         run: dev/test_wasm_browser.sh
 
   wasm-sentinels:
+    needs: std-matrix
     name: wasm GOROOT sentinels
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -371,7 +386,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ env.LLGO_REF }}
+          ref: ${{ needs.std-matrix.outputs.llgo-sha }}
       - uses: ./.github/actions/setup-deps
         with:
           llvm-version: 22
@@ -452,8 +467,8 @@ jobs:
 
   std-summary:
     name: Standard Library summary
-    if: always()
-    needs: [native, wasm-std, wasm-browser, wasm-sentinels]
+    if: ${{ !cancelled() && needs.std-matrix.result == 'success' }}
+    needs: [std-matrix, native, wasm-std, wasm-browser, wasm-sentinels]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -462,7 +477,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ env.LLGO_REF }}
+          ref: ${{ needs.std-matrix.outputs.llgo-sha }}
 
       - name: Set up Go for the report generator
         uses: ./.github/actions/setup-go
@@ -490,13 +505,16 @@ jobs:
 
       - name: Generate standard library report
         id: report
+        env:
+          LLGO_SHA: ${{ needs.std-matrix.outputs.llgo-sha }}
         if: always()
         run: |
           report_md="$RUNNER_TEMP/std-report.md"
           coverage_md="$RUNNER_TEMP/std-coverage.md"
           coverage_ok=0
           if python3 compatibility-ci/scripts/check_report_coverage.py std \
-            --native-reports native-reports --wasm-reports wasm-reports >"$coverage_md"; then
+            --native-reports native-reports --wasm-reports wasm-reports \
+            --revision "$LLGO_SHA" >"$coverage_md"; then
             coverage_ok=1
           fi
           # The detailed generator assumes complete reports. Use the summary
@@ -554,7 +572,11 @@ jobs:
             } >"$report_md"
           fi
 
-          cat "$coverage_md" "$report_md" >"$RUNNER_TEMP/std-report-with-coverage.md"
+          {
+            echo "LLGo: [$LLGO_SHA](https://github.com/$LLGO_REPOSITORY/commit/$LLGO_SHA)"
+            echo
+            cat "$coverage_md" "$report_md"
+          } >"$RUNNER_TEMP/std-report-with-coverage.md"
           mv "$RUNNER_TEMP/std-report-with-coverage.md" "$report_md"
           cat "$report_md" >>"$GITHUB_STEP_SUMMARY"
           echo "STD_REPORT=$report_md" >>"$GITHUB_ENV"

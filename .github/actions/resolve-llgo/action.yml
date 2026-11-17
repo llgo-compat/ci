@@ -1,0 +1,32 @@
+name: Resolve LLGo revision
+description: Resolve a branch, tag or commit once for every consumer in a compatibility run
+inputs:
+  repository:
+    description: LLGo repository
+    required: true
+  ref:
+    description: LLGo branch, tag or commit
+    required: true
+outputs:
+  sha:
+    description: Immutable LLGo commit
+    value: ${{ steps.resolve.outputs.result }}
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      uses: actions/github-script@v8
+      env:
+        LLGO_REPOSITORY: ${{ inputs.repository }}
+        LLGO_REF: ${{ inputs.ref }}
+      with:
+        retries: 3
+        result-encoding: string
+        script: |
+          const [owner, repo] = process.env.LLGO_REPOSITORY.split('/');
+          const {data} = await github.rest.repos.getCommit({owner, repo, ref: process.env.LLGO_REF});
+          if (!/^[0-9a-f]{40}$/.test(data.sha)) {
+            throw new Error('GitHub did not return a full LLGo commit SHA');
+          }
+          core.info(`LLGo ${owner}/${repo}@${data.sha}`);
+          return data.sha;
