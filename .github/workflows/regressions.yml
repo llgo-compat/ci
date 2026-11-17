@@ -180,6 +180,8 @@ jobs:
           modfile="$RUNNER_TEMP/core-runtime.mod"
           cp .github/test-go.mod "$modfile"
           cp .github/test-go.sum "${modfile%.mod}.sum"
+          go_version="$(go env GOVERSION)"
+          go mod edit -modfile="$modfile" -go="${go_version#go}"
           go mod edit -modfile="$modfile" -replace="github.com/xgo-dev/llgo/runtime=$PWD/runtime"
           LLGO="$RUNNER_TEMP/core-tools/llgo" LLGO_TEST_MODFILE="$modfile" \
             bash dev/test_std_buildmodes.sh ./test/std/runtime
