@@ -1,4 +1,4 @@
-Mise and Pixi are checked daily against the same resolved LLGo main commit on
+Pixi is checked daily against the same resolved LLGo main commit on
 Linux amd64/arm64, macOS amd64/arm64, and native Windows amd64. A checkout path
 containing spaces also exercises activation and build scripts. Workflow PRs
 run the same matrix; manual runs can select another LLGo repository/ref.

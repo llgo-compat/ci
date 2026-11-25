@@ -43,39 +43,6 @@ jobs:
       - id: revision
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  mise:
-    name: Mise (${{ matrix.os }})
-    needs: revision
-    runs-on: ${{ matrix.os == 'ubuntu-24.04' && fromJSON(needs.revision.outputs.linux_runner) || matrix.os }}
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: llgo dev
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-2025]
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          repository: ${{ inputs.llgo_repository || 'xgo-dev/llgo' }}
-          ref: ${{ needs.revision.outputs.sha }}
-          path: llgo dev
-      - uses: jdx/mise-action@f5be966e4a917d54244728e6a5fdcd1d93a35e6c # v5.2.6
-        with:
-          version: 2026.10.7
-          install_args: --locked
-          working_directory: llgo dev/dev
-          env: true
-          export_path: true
-      - name: Build LLGo and check native dependencies
-        if: runner.os != 'Windows'
-        run: bash dev/check_devenv.sh
-      - name: Build LLGo and check native dependencies (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: .\dev\check_devenv.ps1
-
   pixi:
     name: Pixi (${{ matrix.os }})
     needs: revision
@@ -109,14 +76,12 @@ jobs:
 
   summary:
     name: Development environment summary
-    needs: [revision, mise, pixi]
+    needs: [revision, pixi]
     if: always() && !cancelled()
     runs-on: ${{ fromJSON(needs.revision.outputs.linux_runner || '["ubuntu-24.04"]') }}
     env:
-      MISE_RESULT: ${{ needs.mise.result }}
       PIXI_RESULT: ${{ needs.pixi.result }}
     steps:
-      - name: Verify both host matrices
+      - name: Verify Pixi host matrix
         run: |
-          test "$MISE_RESULT" = success
           test "$PIXI_RESULT" = success
